@@ -7,7 +7,18 @@ from torchvision import transforms, models
 from PIL import Image
 import io
 from langdetect import detect
+from keras.models import load_model  # Import Keras model loading
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
 
+
+try:
+    keras_model = tf.keras.models.load_model("./my_model")  # Adjust path if necessary
+    print(f"Model loaded successfully. Input shape: {keras_model.input_shape}")
+except Exception as e:
+    keras_model = None
+    print(f"Error loading model: {str(e)}")
 # Initialize the FastAPI app
 app = FastAPI()
 
@@ -34,10 +45,9 @@ def load_chatbot():
     try:
         return pipeline(
             "text-generation",
-            model="./fine_tuned_medical_chatbot",
-            tokenizer="./fine_tuned_medical_chatbot",
+            model="./fine_tuned_medical_chatbotd",
+            tokenizer="./fine_tuned_medical_chatbotd",
             device=-1,
-            truncation=True
         )
     except Exception as e:
         print(f"Error loading chatbot model: {e}")
@@ -76,6 +86,8 @@ def load_translation_model():
     except Exception as e:
         print(f"Error loading translation model: {e}")
         return None, None, None
+
+
 
 chatbot = load_chatbot()
 model = load_disease_model()
@@ -172,6 +184,8 @@ async def predict(file: UploadFile = File(...)) -> dict:
     try:
         image = Image.open(io.BytesIO(await file.read())).convert("RGB")
         image = transform(image).unsqueeze(0)
+        image_np = image.squeeze(0).numpy()  # Remove batch dimension and convert to NumPy
+        output = keras_model.predict(np.expand_dims(image_np, axis=0))  # Ensure correct shape
         
         with torch.no_grad():
             output = model(image)
@@ -205,3 +219,42 @@ async def translate_text(request: TranslationRequest) -> dict:
 @app.get("/")
 async def root():
     return {"message": "Medical Chatbot API is up and running!"}
+
+
+def preprocess_image(image: Image.Image, target_size=(64, 64)) -> np.ndarray:
+    """
+    Preprocess the image to match the model's input size (64x64 grayscale).
+    Args:
+        image (PIL.Image): The uploaded image
+        target_size (tuple): Target size for the image
+    Returns:
+        np.ndarray: Preprocessed image array
+    """
+    image = image.resize(target_size).convert("L")  # Convert to grayscale
+    img_array = img_to_array(image) / 255.0  # Normalize pixel values to [0, 1]
+    return np.expand_dims(img_array, axis=0)  # Add batch dimension
+
+
+# Endpoint for brain tumor prediction
+@app.post("/predictbrain")
+async def predict_brain(file: UploadFile = File(...)) -> dict:
+    if not keras_model:
+        return {"error": "Model not loaded properly"}
+
+    try:
+        # Read image
+        image = Image.open(io.BytesIO(await file.read()))
+        
+        # Preprocess image
+        processed_image = preprocess_image(image)
+        
+        # Make prediction
+        prediction = keras_model.predict(processed_image)
+
+        # Interpret result
+        result = "Tumor detected" if prediction[0][0] > 0.5 else "No tumor detected"
+        
+        return {"prediction": result, "confidence": float(prediction[0][0])}
+    
+    except Exception as e:
+        return {"error": f"Error processing image: {str(e)}"}

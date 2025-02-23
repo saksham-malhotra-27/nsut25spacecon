@@ -61,3 +61,7 @@ aibackend/venv
 aibackend/nothere
 aibackend/fine_tuned_medical_chatbot
 aibackend/chest_disease_model.pth
+aibackend/my_model
+aibackend/fine_tuned_medical_chatbotd
+aibackend/fine_tuned_medical_chatbotn
+

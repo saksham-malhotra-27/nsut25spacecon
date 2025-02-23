@@ -1,7 +1,8 @@
 "use client"
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { PlaceholdersAndVanishInput } from '@/components/ui/placeholders-and-vanish-input';
 import { supportedLanguages } from '@/utils/languages';
+
 const ChatInterface = () => {
   const [userInput, setUserInput] = useState('');
   const [messages, setMessages] = useState([]);
@@ -9,6 +10,7 @@ const ChatInterface = () => {
   const [selectedLanguage, setSelectedLanguage] = useState('english');
   const [selectedPrediction, setSelectedPrediction] = useState('chest-predict');
   const [selectedFile, setSelectedFile] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const placeholders = [
     "What are your symptoms?",
@@ -19,7 +21,8 @@ const ChatInterface = () => {
   const predictionOptions = [
     { value: 'chest-predict', label: 'Chest X-Ray Analysis' },
     { value: 'pneumonia-predict', label: 'Pneumonia Detection' },
-    { value: 'edema-predict', label: 'Edema Analysis' }
+    { value: 'edema-predict', label: 'Edema Analysis' },
+    { value: 'brain-predict', label: 'Brain Tumor Analysis' } // New dropdown option
   ];
 
   const handleInputChange = (e) => {
@@ -75,52 +78,152 @@ const ChatInterface = () => {
     const formData = new FormData();
     formData.append('file', selectedFile);
 
+    // Determine endpoint URL based on prediction option
+    let endpointUrl = '';
+    if (selectedPrediction === 'brain-predict') {
+      endpointUrl = 'http://localhost:8000/predictbrain';
+    } else {
+      endpointUrl = `http://localhost:5000/diseases/${selectedPrediction}`;
+    }
+
     try {
-      const response = await fetch(`http://localhost:5000/diseases/${selectedPrediction}`, {
+      const response = await fetch(endpointUrl, {
         method: 'POST',
-        headers: {
+        // Note: For brain prediction we assume no JSON header is needed as we use FormData.
+        headers: selectedPrediction !== 'brain-predict' ? {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
+        } : {},
         body: formData
       });
 
       const data = await response.json();
       
-      if (data.success) {
-        const predictionLabel = predictionOptions.find(opt => opt.value === selectedPrediction)?.label;
-        const resultMessage = data.prediction === 0 
-          ? `Based on the analysis, there are no signs of ${predictionLabel} in the uploaded image.`
-          : `The analysis indicates potential signs of ${predictionLabel}. We recommend consulting with your nearest healthcare provider for a proper medical evaluation.`;
+      // Create an image preview message
+      const imageMessage = (
+        <div>
+          <p>Uploaded image for {predictionOptions.find(opt => opt.value === selectedPrediction)?.label}:</p>
+          <img 
+            src={URL.createObjectURL(selectedFile)} 
+            alt="Uploaded" 
+            className="max-w-full h-auto max-h-60 object-contain"
+          />
+        </div>
+      );
 
-        // Create a message with the image preview
-        const imageMessage = (
-          <div>
-            <p>Uploaded image for {predictionLabel}:</p>
-            <img 
-              src={URL.createObjectURL(selectedFile)} 
-              alt="Uploaded" 
-              className="max-w-full h-auto max-h-60 object-contain"
-            />
-          </div>
-        );
-
-        setMessages(prev => [
-          ...prev,
-          { type: 'user', content: imageMessage },
-          { type: 'ai', content: resultMessage }
-        ]);
+      // For brain prediction, adjust the message accordingly
+      if (selectedPrediction === 'brain-predict') {
+        if (data.prediction !== undefined) {
+          const resultMessage = `Brain Tumor Analysis: ${data.prediction} (Confidence: ${data.confidence}).`;
+          setMessages(prev => [
+            ...prev,
+            { type: 'user', content: imageMessage },
+            { type: 'ai', content: resultMessage }
+          ]);
+        } else {
+          setMessages(prev => [
+            ...prev,
+            { type: 'ai', content: 'Sorry, brain prediction failed. Please try again.' }
+          ]);
+        }
       } else {
-        setMessages(prev => [...prev, { type: 'ai', content: 'Sorry, prediction failed. Please try again.' }]);
+        // For other prediction options
+        if (data.success) {
+          const predictionLabel = predictionOptions.find(opt => opt.value === selectedPrediction)?.label;
+          const resultMessage = data.prediction === 0 
+            ? `Based on the analysis, there are no signs of ${predictionLabel} in the uploaded image.`
+            : `The analysis indicates potential signs of ${predictionLabel}. We recommend consulting with your nearest healthcare provider for a proper medical evaluation.`;
+  
+          setMessages(prev => [
+            ...prev,
+            { type: 'user', content: imageMessage },
+            { type: 'ai', content: resultMessage }
+          ]);
+        } else {
+          setMessages(prev => [
+            ...prev,
+            { type: 'ai', content: 'Sorry, prediction failed. Please try again.' }
+          ]);
+        }
       }
     } catch (error) {
       console.error('Error uploading image:', error);
-      setMessages(prev => [...prev, { type: 'ai', content: 'Sorry, an error occurred during prediction.' }]);
+      setMessages(prev => [
+        ...prev,
+        { type: 'ai', content: 'Sorry, an error occurred during prediction.' }
+      ]);
     } finally {
       setIsLoading(false);
       setSelectedFile(null);
       e.target.reset();
     }
   };
+
+  const handleNearbySearch = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(async (position) => {
+        const { latitude, longitude } = position.coords;
+        const sessionToken = crypto.randomUUID(); // Generate a unique session token
+  
+        const url = 'https://api.mapbox.com/search/searchbox/v1/suggest';
+        const params = new URLSearchParams({
+          q: 'hospital', // Change query if needed (e.g., "doctor")
+          language: 'en',
+          limit: '5', // Adjust limit as desired
+          session_token: sessionToken,
+          proximity: `${longitude},${latitude}`, // Mapbox expects longitude,latitude order
+          country: 'US',
+          access_token: process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN
+        });
+  
+        try {
+          const response = await fetch(`${url}?${params.toString()}`, { method: 'GET' });
+          const data = await response.json();
+  
+          if (!response.ok) {
+            setErrorMessage(data.error || 'Failed to fetch data');
+            return;
+          }
+  
+          // Build a list of suggestion items
+          if (data.suggestions && data.suggestions.length > 0) {
+            const suggestionsList = data.suggestions.map((suggestion, index) => (
+              <li key={index}>
+                {console.log(suggestion)}
+                {suggestion.name || suggestion.text || 'Unknown Location'}
+              </li>
+            ));
+            const suggestionsMessage = (
+              <div>
+                <h3>Nearby Hospitals/Doctors</h3>
+                <ul>{suggestionsList}</ul>
+                <small>{data.ttribution || data.attribution}</small>
+              </div>
+            );
+  
+            // Append the suggestions to the messages so they display in the central area
+            setMessages((prev) => [...prev, { type: 'ai', content: suggestionsMessage }]);
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              { type: 'ai', content: 'No nearby hospitals/doctors found.' }
+            ]);
+          }
+          setErrorMessage('');
+        } catch (error) {
+          console.error('Error fetching data:', error);
+          setErrorMessage('An error occurred while fetching data. Please try again.');
+        }
+      }, (error) => {
+        console.error('Geolocation error:', error);
+        setErrorMessage('Unable to retrieve your location. Please enable location services.');
+      });
+    } else {
+      console.error('Geolocation is not supported by this browser.');
+      setErrorMessage('Geolocation is not supported by this browser.');
+    }
+  };
+  
+  
 
   return (
     <div className="flex-1 flex flex-col h-screen relative">
@@ -166,11 +269,18 @@ const ChatInterface = () => {
                 </option>
               ))}
             </select>
+            <button
+              type="button"
+              onClick={handleNearbySearch}
+              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+            >
+              Nearby Hospitals/Doctors
+            </button>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto z-10 max-w-7xl mx-auto w-full p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto z-10 max-w-7xl mx-auto w-full p-4 space-y-4 scrollbar-hidden">
         {messages.map((message, index) => (
           <div
             key={index}
@@ -198,6 +308,11 @@ const ChatInterface = () => {
                 <div className="w-2 h-2 rounded-full bg-gray-600 animate-[bounce_1s_infinite_400ms]"></div>
               </div>
             </div>
+          </div>
+        )}
+        {errorMessage && (
+          <div className="p-3 bg-red-100 text-red-700 rounded mb-4">
+            {errorMessage}
           </div>
         )}
       </div>

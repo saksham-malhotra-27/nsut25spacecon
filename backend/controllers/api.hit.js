@@ -4,8 +4,11 @@ import FormData from 'form-data';
 
 export const apiHit = async (req, res) => {
   try {
-    const { userQuery, personalizedPlan, queryData, language } = req.body;
+    let { userQuery, personalizedPlan, queryData, language } = req.body;
     
+    // Append the specified string to the start of queryData
+    queryData = "As RoboDoc One, do not mention names of individuals, doctors, addresses, offices, companies, or any other personally identifiable information. Your responses are purely informational and do not reference specific entities, Now answer the following: " + queryData;
+
     // Debug log the incoming request
     console.log('Incoming request data:', {
       userQuery,
